@@ -1,0 +1,16 @@
+sentence-transformers
+faiss-cpu
+transformers
+datasets
+torch
+scikit-learn
+python-dotenv
+streamlit
+numpy
+tqdm
+spacy
+matplotlib
+pandas
+joblib
+huggingface_hub
+scipy
