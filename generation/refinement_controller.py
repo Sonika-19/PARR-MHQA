@@ -39,6 +39,7 @@ class PipelineResult:
 
 class RefinementController:
     REFINE_ACCEPT_MARGIN = 0.15
+    EMPTY_ANSWER_FALLBACK = "No answer generated from model output."
 
     def __init__(
         self,
@@ -105,6 +106,21 @@ class RefinementController:
             return self.prompt_engine.build_chain_of_thought_prompt(query, context_texts)
         return self.prompt_engine.build_direct_prompt(query, context_texts)
 
+    @classmethod
+    def _safe_answer_text(cls, extracted_answer: str, raw_text: str) -> str:
+        answer = (extracted_answer or "").strip()
+        if answer:
+            return answer
+
+        raw = (raw_text or "").strip()
+        if not raw:
+            return cls.EMPTY_ANSWER_FALLBACK
+
+        # If the model only echoes the prompt marker, salvage any residual content.
+        raw = re.sub(r"(?i)^\s*answer\s*:\s*", "", raw).strip()
+        raw = re.sub(r"[\s\.,;:]+$", "", raw)
+        return raw or cls.EMPTY_ANSWER_FALLBACK
+
     def _score_answer(self, query: str, answer: str, docs: List[RetrievalResult]):
         context_texts = self.prompt_engine.format_context(docs)
         h_result = self.hallucination_detector.compute_hallucination_score(answer, context_texts, query)
@@ -127,7 +143,10 @@ class RefinementController:
         t0 = time.perf_counter()
         prompt = self._build_prompt(query, docs, prompt_style)
         raw_answer = self.generator.generate_answer(prompt, max_tokens=500)
-        original_answer = self.generator.extract_final_answer(raw_answer)
+        original_answer = self._safe_answer_text(
+            self.generator.extract_final_answer(raw_answer),
+            raw_answer,
+        )
         time_generation += time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -136,8 +155,18 @@ class RefinementController:
 
         # Step 2: one refinement attempt (always generated, no conditions).
         t0 = time.perf_counter()
-        refined_raw_answer = self.generator.generate_refinement(prompt, max_tokens=500)
-        refined_answer = self.generator.extract_final_answer(refined_raw_answer)
+        context_texts = self.prompt_engine.format_context(docs)
+        refinement_prompt = self.prompt_engine.build_refinement_prompt(
+            query,
+            original_answer,
+            original_c_result.critique_text,
+            context_texts,
+        )
+        refined_raw_answer = self.generator.generate_refinement(refinement_prompt, max_tokens=500)
+        refined_answer = self._safe_answer_text(
+            self.generator.extract_final_answer(refined_raw_answer),
+            refined_raw_answer,
+        )
         time_generation += time.perf_counter() - t0
 
         t0 = time.perf_counter()
